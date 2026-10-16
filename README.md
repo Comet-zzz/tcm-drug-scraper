@@ -1,63 +1,75 @@
-# 药物说明书信息采集工具（tcm_scraper）
+# TCM Drug-Label Data Collector (`tcm_scraper`)
 
-用于学术研究场景的单机 Python 采集工具：从公开药品说明书列表页（如国家药监局数据查询、药源网等），
-采集指定中药相关药品的说明书字段（目标地址与关键词均可在设置向导中填写，默认不筛选），
-经清洗去重后导出为 UTF-8-SIG 编码的 CSV，供后续 LLM 毒性信息抽取与数据库构建使用。
+A single-machine Python tool for academic research. It collects drug-label fields for specified
+Chinese-medicine (TCM) products from public drug-label listing pages (e.g. the NMPA data-query
+site, Yaopinnet), cleans and de-duplicates them, and exports a UTF-8-SIG CSV for downstream
+LLM-based toxicity extraction and database construction. The target address and keyword are entered
+through a setup wizard and can be left unfiltered by default.
 
-采集字段：`药品名称` `主要成分` `不良反应` `禁忌` `注意事项`（另附 `数据来源URL` `抓取时间`，用于数据溯源）
+Collected fields: `药品名称` (drug name), `主要成分` (main ingredients), `不良反应` (adverse reactions),
+`禁忌` (contraindications), `注意事项` (precautions) — plus `数据来源URL` (source URL) and
+`抓取时间` (scrape timestamp) for provenance.
+
+> The tool targets Chinese-language drug-label pages, so the CSV column names, the section markers
+> such as `【不良反应】`, and the interactive console prompts are in Chinese.
 
 ---
 
-## 1. 环境要求
+## 1. Requirements
 
-- Python 3.9+（已在 Python 3.14.7 + Windows 环境验证通过）
-- 目标站点为 JS 动态渲染页面时，需本机安装 **Chrome 浏览器**（由 Selenium 驱动）
+- Python 3.9+ (verified on Python 3.14.7, Windows)
+- If the target site is JS-rendered, **Chrome** must be installed locally (driven by Selenium)
 
-## 2. 安装依赖
+## 2. Install dependencies
 
-建议使用独立虚拟环境，以免污染全局 Python 环境：
+Use a dedicated virtual environment so the global Python environment stays clean:
 
 ```powershell
-# 在项目根目录执行
+# Run from the project root
 python -m venv .venv
 .venv\Scripts\python.exe -m pip install -r requirements.txt
 ```
 
-> **使用虚拟环境的原因**：在全局环境中直接执行 `pip install selenium` 可能触发 pip 依赖回溯（该过程无输出，容易被误判为进程卡死），
-> 甚至报 `ResolutionImpossible` 错误。独立虚拟环境可完全避免此类依赖冲突。
+> **Why a virtual environment**: running `pip install selenium` in the global environment can trigger
+> pip's dependency backtracking — a silent, output-less phase that is easily mistaken for a hang, and
+> can even end in a `ResolutionImpossible` error. A virtual environment avoids these conflicts entirely.
 >
-> **PyCharm 用户**：依次选择 `File → Settings → Project → Python Interpreter → Add → Existing`，
-> 指定 `.venv\Scripts\python.exe`，之后可直接运行脚本。
+> **PyCharm users**: choose `File → Settings → Project → Python Interpreter → Add → Existing`, point it
+> at `.venv\Scripts\python.exe`, and the script can be run directly afterwards.
 
-## 3. 路线 A（推荐）：手动保存页面，脚本批量抽取字段
+## 3. Route A (recommended): save pages manually, batch-extract the fields
 
-**适用场景**：目标数据库需要登录或付费（例如药智数据），脚本不宜也不应绕过登录机制。
-用户在浏览器中正常浏览并保存页面，脚本仅负责将 5 个字段批量抽取为表格。
-此路线全程不联网、不启动浏览器，不存在账号风险。
+**When to use it**: the target database requires login or payment (e.g. the Yaozhi Data database), and
+the script neither can nor should bypass the login. The user browses and saves pages normally in a
+browser, and the script only bulk-extracts the five fields into a table. This route never touches the
+network and never launches a browser, so there is no account risk.
 
-### 3.1 在浏览器中保存页面（Chrome）
+### 3.1 Save pages in the browser (Chrome)
 
-1. 登录目标数据库，搜索并打开一条药品的**说明书**页面
-2. **待页面内容完整显示后再保存**（若在内容加载完成前按下 `Ctrl+S`，保存结果仅为空白框架）
-3. 按 `Ctrl+S`
-4. 保存位置选择 `saved_pages` 文件夹（不存在则新建）
-5. 文件名改为药品名称，例如 `黄芩片`；格式选择「**网页，仅 HTML**」
-6. 切换至下一条药品，重复第 3~5 步。建议先保存 3~5 条进行验证
+1. Log in to the target database, search for a drug, and open its **label** page.
+2. **Save only after the page has fully rendered** (pressing `Ctrl+S` before the content loads saves
+   an empty frame).
+3. Press `Ctrl+S`.
+4. Choose the `saved_pages` folder as the destination (create it if it does not exist).
+5. Rename the file to the drug name, e.g. `黄芩片`, and pick the "**Webpage, HTML Only**" format.
+6. Switch to the next drug and repeat steps 3–5. Saving 3–5 pages first, as a validation run, is
+   recommended.
 
-> 文件名建议使用药品名称：当页面中读取不到药名时，脚本会以文件名作为兜底。
-> 文件名不规范亦不影响使用，页面中通常均可读取到药名。
+> Using the drug name as the filename is recommended: when the page yields no readable name, the
+> script falls back to the filename. Irregular filenames are harmless — the page usually provides the
+> name anyway.
 
-保存完成后，文件应形如：`saved_pages\黄芩片.html`。
-（请勿选择「网页，全部」——该选项会额外生成 `_files` 文件夹，虽无副作用但并无必要；
-也**不要**保存为 `.mhtml` 格式，脚本不支持该格式。）
+When finished, the folder should look like: `saved_pages\黄芩片.html`.
+(Do not choose "Webpage, Complete" — it also generates a `_files` folder; harmless but unnecessary.
+Also do **not** save as `.mhtml`, which the script does not support.)
 
-### 3.2 解析整个文件夹
+### 3.2 Parse the whole folder
 
 ```powershell
 .venv\Scripts\python.exe tcm_scraper.py
 ```
 
-在第 1 步问答中直接**粘贴文件夹路径**，脚本会自动识别为「文件夹模式」：
+At the first prompt, paste the **folder path** and the script recognises it as "folder mode":
 
 ```
 【第 1 步 / 共 3 步】请输入目标地址，支持以下三种形式：
@@ -67,47 +79,50 @@ python -m venv .venv
     √ 已识别为本地文件夹：将以「解析已保存网页」模式运行（不联网）。
 ```
 
-文件夹路径获取方式：打开 `saved_pages` 文件夹，单击地址栏并完整复制（形如
-`D:\PycharmProjects\tcm-drug-scraper\saved_pages`）。相对路径 `saved_pages` 亦可。
+To copy the folder path: open the `saved_pages` folder, click the address bar, and copy the full path
+(e.g. `D:\PycharmProjects\tcm-drug-scraper\saved_pages`). The relative path `saved_pages` also works.
 
-非交互式调用（不进入问答）：
+Non-interactive invocation (no wizard):
 
 ```powershell
 .venv\Scripts\python.exe tcm_scraper.py --mode folder --url "saved_pages"
 ```
 
-### 3.3 结果检查
+### 3.3 Checking the results
 
-使用 Excel 打开 `output\tcm_drug_data.csv`（自动生成，UTF-8-SIG 编码，无乱码）：
+Open `output\tcm_drug_data.csv` in Excel (generated automatically, UTF-8-SIG, no mojibake):
 
-- 5 个字段均有内容 → 采集成功
-- 某字段为 `N/A` → 该页面确未包含此项，或选择器需调整（参见 4.1）
-- **整行仅有药名、其余字段均为 `N/A`** → 保存页面时内容尚未加载完成，需返回浏览器重新保存该文件
-- 缺少某个药品 → 检查文件是否保存为 `.mhtml`，或保存到了其他文件夹
+- All five fields populated → success
+- A field is `N/A` → the page genuinely lacks it, or the selector needs adjustment (see §4.1)
+- **A row with only the drug name and all other fields `N/A`** → the page was not fully loaded when
+  saved; re-save it in the browser
+- A drug is missing → check whether the file was saved as `.mhtml`, or into a different folder
 
-确认结果无误后，可按同样方式增加保存页面数量并重新运行（重复数据会按
-`药品名称 + 主要成分` 自动去重）。
+Once the results look right, add more saved pages in the same way and re-run (duplicates are removed
+automatically by `药品名称 + 主要成分`).
 
-## 4. 路线 B：由脚本自动联网采集
+## 4. Route B: automated online collection
 
-> **练习目标推荐（已实测）**：药源网「中药说明书」字母列表页——公开、无需登录、静态页面，选择器已配好：
+> **Recommended practice target (already tested)**: the "Chinese-medicine labels" alphabetical listing
+> on Yaopinnet — public, no login, static pages, selectors pre-configured:
 >
 > ```powershell
 > .venv\Scripts\python.exe tcm_scraper.py --url "https://www.yaopinnet.com/zhongyao1/h1.htm" --mode requests --no-filter --max-items 5
 > ```
 >
-> 该页为字母 H 开头的 40 条中药说明书（含黄芩片、黄连上清片等）。中药老品种的
-> 「不良反应 / 禁忌」常为「尚不明确」或整项缺失，导出 `N/A` 属正常现象。
+> That page lists 40 Chinese-medicine labels starting with the letter H (including 黄芩片 and
+> 黄连上清片). For older TCM products the "adverse reactions / contraindications" sections are often
+> "尚不明确" (not yet clear) or missing entirely, so an exported `N/A` is normal.
 
-指定目标共有 **三种** 方式，按推荐顺序排列：
+There are **three** ways to specify the target, ordered by preference:
 
-### 方式一：直接运行，根据交互提示输入（推荐）
+### Option 1: run directly and answer the interactive prompts (recommended)
 
 ```powershell
 .venv\Scripts\python.exe tcm_scraper.py
 ```
 
-出现如下问答后，粘贴网址并回车即可：
+Paste the URL and press Enter at the prompt:
 
 ```
 【第 1 步 / 共 3 步】请输入目标地址，支持以下三种形式：
@@ -117,14 +132,15 @@ python -m venv .venv
     目标地址 >  https://你要抓的搜索结果页
 ```
 
-- 回答完 3 个问题（目标地址 / 中药名 / 采集条数）后开始采集
-- 答案自动写入 `config.json`，**后续运行可直接连续回车沿用**
-- 需要更换地址时，重新运行并输入新地址即可
-- 第 2 步直接回车 = 沿用当前设置；输入 `全部` = 不筛选
+- After the three questions (target address / herb name / item count), collection starts
+- The answers are written to `config.json`, so **subsequent runs can just press Enter**
+- To change the address, re-run and enter a new one
+- At step 2, pressing Enter keeps the current setting; entering `全部` (all) disables filtering
 
-### 方式二：修改 config.json
+### Option 2: edit `config.json`
 
-脚本首次运行会自动在同目录生成 `config.json`，可用任意文本编辑器修改，**无需 Python 知识**：
+On first run the script generates a `config.json` in the same directory, editable with any text
+editor, **no Python knowledge required**:
 
 ```json
 {
@@ -139,33 +155,35 @@ python -m venv .venv
 }
 ```
 
-注意事项：
+Notes:
 
-- `list_url` 必须为**搜索结果列表页**地址，不能是单条药品的详情页
-- `name_filter` 留空表示不筛选；填写关键词（如 `黄芩`）则仅采集名称包含该词的条目
-- 网址需使用英文双引号包裹，最后一项后**不要**添加逗号
-- 修改保存后即可生效，无需重启
+- `list_url` must point to a **search-results listing page**, not a single drug's detail page
+- An empty `name_filter` means no filtering; a keyword (e.g. `黄芩`) collects only matching names
+- Wrap the URL in double quotes and do **not** add a trailing comma after the last item
+- Changes take effect as soon as the file is saved; no restart needed
 
-### 方式三：通过命令行参数指定（一次性，不落盘）
+### Option 3: specify via command-line arguments (one-off, not persisted)
 
 ```powershell
 .venv\Scripts\python.exe tcm_scraper.py --url "https://你的目标站点/搜索结果页"
 ```
 
-命令中包含 `--url` 时不再弹出问答。
+When the command contains `--url`, no wizard is shown.
 
-### 4.1 选择器调整（进阶，仅当脚本无法抓取内容时）
+### 4.1 Adjusting selectors (advanced; only when the script cannot extract content)
 
-在 Chrome 中打开搜索结果页 → F12 → 选中目标元素 → 右键 `Copy → Copy selector`（获取 CSS 选择器）或
-`Copy → Copy XPath`。将结果填入 `tcm_scraper_lib/config.py` 中 `SELECTORS` 对应字段的**候选列表最前位置**，旧选择器无需删除：
+In Chrome, open the listing page → F12 → select the target element → right-click
+`Copy → Copy selector` (CSS) or `Copy → Copy XPath`. Put the result at the **front of the candidate
+list** for the corresponding field in `tcm_scraper_lib/config.py`; the old selectors do not need to
+be removed:
 
 ```python
 SELECTORS = {
     "list": {
-        "item":      ["table tbody tr"],          # 一条搜索结果
-        "item_link": ["a::attr(href)"],           # 条目中的详情页链接
-        "item_name": ["td.name"],                 # 条目中的药名（用于关键词过滤）
-        "next_page": ["a.next::attr(href)"],      # 下一页
+        "item":      ["table tbody tr"],          # one search-result row
+        "item_link": ["a::attr(href)"],           # detail-page link inside a row
+        "item_name": ["td.name"],                 # drug name in the row (used for keyword filtering)
+        "next_page": ["a.next::attr(href)"],      # next page
     },
     "detail": {
         "drug_name":         ["h1.drug-name", "//h1"],
@@ -177,76 +195,79 @@ SELECTORS = {
 }
 ```
 
-选择器写法约定：
+Selector syntax conventions:
 
-| 写法 | 解析方式 |
+| Syntax | How it is parsed |
 |---|---|
-| `div.content`、`table tbody tr` | CSS Selector（BeautifulSoup） |
-| `//h1`、`//a[contains(text(),'下一页')]`、`xpath://div[@id="x"]` | XPath（需 lxml） |
-| `a::attr(href)` | 取属性而非文本 |
+| `div.content`, `table tbody tr` | CSS selector (BeautifulSoup) |
+| `//h1`, `//a[contains(text(),'下一页')]`, `xpath://div[@id="x"]` | XPath (requires lxml) |
+| `a::attr(href)` | take an attribute instead of the text |
 
-### 4.2 调试方法
+### 4.2 Debugging
 
 ```powershell
-# 打开可见浏览器窗口，便于观察页面并调整选择器
+# Open a visible browser window to inspect the page and tune selectors
 .venv\Scripts\python.exe tcm_scraper.py --url "https://..." --no-headless --max-items 2 --log-level DEBUG
 
-# 保存原始 HTML：一次抓取后可反复调整选择器并重放解析，避免重复请求目标站点
+# Save the raw HTML: fetch once, then replay parsing with different selectors without re-requesting the site
 .venv\Scripts\python.exe tcm_scraper.py --url "https://..." --save-raw
 ```
 
-即使选择器全部失效，脚本仍有三层兜底机制：**选择器 → 中文标注符号（【不良反应】）→ 标签节点/表格对**，
-通常首次运行即可完成抓取，无需一次性配置完善。
+Even if every selector fails, the script still falls back through three layers — **selector →
+Chinese section marker (`【不良反应】`) → label node / table pair** — so a first run usually completes
+without a fully tuned configuration.
 
-## 5. 正式运行（路线 B 完整参数）
+## 5. Production runs (full Route B parameters)
 
 ```powershell
-# 最简方式：运行后按问答提示粘贴网址
+# Simplest: run and paste the URL at the prompt
 .venv\Scripts\python.exe tcm_scraper.py
 
-# 网址写入命令（不弹问答）：采集全部条目，最多 20 条详情 / 3 页列表
+# URL on the command line (no wizard): all items, up to 20 detail pages / 3 listing pages
 .venv\Scripts\python.exe tcm_scraper.py --url "https://你的目标站点/搜索结果页"
 
-# 仅抓取 5 条以先行验证
+# Fetch only 5 items as a quick validation
 .venv\Scripts\python.exe tcm_scraper.py --url "https://..." --max-items 5
 
-# 改抓「甘草」，翻 5 页，导出至自定义路径
+# Collect "甘草" (licorice), paginate 5 pages, export to a custom path
 .venv\Scripts\python.exe tcm_scraper.py --url "https://..." --name "甘草" --pages 5 --out "output/gancao.csv"
 ```
 
-在 PyCharm 中直接运行效果相同——未提供 `--url` 时会在控制台发起询问，需手动输入网址。
+Running from PyCharm behaves identically — with no `--url`, the console wizard starts and asks for the
+URL.
 
-常用参数：
+Common parameters:
 
-| 参数 | 说明 |
+| Parameter | Description |
 |---|---|
-| （无参数） | 启动设置向导，询问网址、中药名与抓取条数 |
-| `--url` | 列表页 URL；或文件夹路径（配合 `--mode folder`） |
-| `--config` | 指定其他配置文件（可为每味中药分别保存配置，默认 `config.json`） |
-| `--no-prompt` | 不启动设置向导，完全依据配置文件与命令行参数运行（适用于定时任务） |
-| `--name` | 关键词过滤（不指定则不筛选） |
-| `--no-filter` | 关闭关键词过滤（PowerShell 下 `--name ""` 会被吞掉，请使用本开关） |
-| `--max-items` | 最多抓取的详情条数，默认 20（建议由小到大逐步调整） |
-| `--pages` | 最多翻页数，默认 3 |
-| `--mode` | `selenium`（默认，支持动态页面）/ `requests`（速度快，适用于静态页面）/ `local`（单个本地文件）/ `folder`（解析文件夹中手动保存的网页） |
-| `--min-delay` / `--max-delay` | 请求间随机休眠区间，默认 2~5 秒（**请勿调低**） |
-| `--retries` | 单次请求最大重试次数，默认 3 |
-| `--timeout` | 单页超时秒数，默认 30 |
-| `--no-headless` | 显示浏览器窗口（调试用） |
-| `--save-raw` | 保存原始 HTML 至 `output/raw_html/` |
-| `--ignore-robots` | 跳过 robots.txt 检查（请谨慎使用） |
+| (no arguments) | Start the setup wizard (asks for URL, herb name, item count) |
+| `--url` | Listing-page URL; or a folder path (with `--mode folder`) |
+| `--config` | Path to an alternative config file (one per herb is possible; default `config.json`) |
+| `--no-prompt` | Skip the wizard; run purely from config and CLI arguments (for scheduled tasks) |
+| `--name` | Keyword filter (no filtering if omitted) |
+| `--no-filter` | Disable keyword filtering and collect every item on the page (in PowerShell `--name ""` is dropped, so use this flag) |
+| `--max-items` | Max number of detail pages to fetch, default 20 (increase gradually) |
+| `--pages` | Max number of listing pages to paginate, default 3 |
+| `--mode` | `selenium` (default, dynamic pages) / `requests` (fast, static pages) / `local` (single local file) / `folder` (parse a folder of manually saved pages) |
+| `--min-delay` / `--max-delay` | Random delay range between requests, default 2–5 s (**do not lower**) |
+| `--retries` | Max retries per request, default 3 |
+| `--timeout` | Per-page timeout in seconds, default 30 |
+| `--no-headless` | Show the browser window (for debugging) |
+| `--save-raw` | Save raw HTML to `output/raw_html/` |
+| `--ignore-robots` | Skip the robots.txt check (use with caution) |
 | `--log-level` | `DEBUG` / `INFO` / `WARNING` / `ERROR` |
 
-## 6. 输出说明
+## 6. Output
 
-- 文件：`output/tcm_drug_data.csv`
-- 编码：**UTF-8-SIG（带 BOM）**，Excel 直接打开中文不乱码
-- 缺失值：统一填充为 `N/A`（注意 `N/A` 是 Excel/pandas 的默认 NA 标记，读取时设置 `keep_default_na=False` 可保留原值）
-- 去重规则：先按 `药品名称 + 主要成分` 去重，再按 `药品名称 + 数据来源URL` 去重
-- 无药品名称的记录将被直接丢弃（名称是后续 LLM 抽取的主键）
-- 日志：输出至控制台与 `logs/tcm_scraper.log`（UTF-8，含每个字段的命中/缺失详情）
+- File: `output/tcm_drug_data.csv`
+- Encoding: **UTF-8-SIG (with BOM)** so Excel opens the Chinese text without mojibake
+- Missing values: filled with `N/A` (note that `N/A` is Excel's/pandas' default NA marker; read with
+  `keep_default_na=False` to preserve it)
+- De-duplication: first by `药品名称 + 主要成分`, then by `药品名称 + 数据来源URL`
+- Records without a drug name are dropped (the name is the primary key for downstream LLM extraction)
+- Logs: written to the console and to `logs/tcm_scraper.log` (UTF-8, with per-field hit/miss detail)
 
-读取示例：
+Read example:
 
 ```python
 import pandas as pd
@@ -254,51 +275,54 @@ df = pd.read_csv("output/tcm_drug_data.csv", encoding="utf-8-sig")
 print(df.shape, df.columns.tolist())
 ```
 
-## 7. 常见问题
+## 7. Troubleshooting
 
-| 现象 | 原因与处理 |
+| Symptom | Cause and fix |
 |---|---|
-| 表格中仅有表头，无数据 | 查看日志末尾的分类诊断：登录墙 / 验证码 / 页面为空壳 / 选择器不匹配，脚本会明确指出具体原因 |
-| 需要更换网址 | 重新运行脚本并在问答中输入新网址；或修改 `config.json` 中的 `list_url` |
-| 每次运行均询问网址 | 问答结果会自动写入 `config.json`，此后直接连续回车即可。如需完全禁用询问，在命令中添加 `--no-prompt`（须同时提供 `--url`） |
-| 运行后未等待输入即退出 | 当前环境非交互式（例如由定时任务调用）。请改用 `--url "..." --no-prompt` |
-| `config.json` 被改坏 | 不影响运行，脚本会给出警告并使用默认值继续。删除该文件后重新运行即可再次生成 |
-| 日志出现乱码 | 控制台代码页问题。`chcp 65001` 切换至 UTF-8；`logs/tcm_scraper.log` 始终为正常 UTF-8 |
-| 抓到 0 条 / 字段多为 `N/A` | 路线 A 参见 3.3；路线 B 参见 4.1 调整选择器 |
-| 页面为登录墙或需要验证码 | 脚本不提供登录与验证码绕过功能。**请改用路线 A**（登录后手动保存页面） |
-| Chrome 驱动启动失败 | 确认已安装 Chrome 且网络可用；脚本会先通过 Selenium Manager 自动匹配驱动，失败后回退至 webdriver-manager |
-| 页面无法翻页 / 抓到重复数据 | `next_page` 选择器不匹配，或该站点使用 JS 分页（可在 F12 Network 中定位真实分页接口，改用 `--mode requests`） |
-| 希望加快采集速度 | 增大 `--max-items` 并不会更快——**性能瓶颈来自刻意的限速设计**。请保持 2~5 秒间隔，这是避免被封禁的关键 |
+| Table has the header row but no data | Look at the classified diagnosis at the end of the log: login wall / CAPTCHA / empty-shell page / selector mismatch — the script names the concrete reason |
+| Need to change the URL | Re-run and enter the new URL, or edit `list_url` in `config.json` |
+| Asked for the URL on every run | Wizard answers are saved to `config.json`; afterwards just press Enter. To disable prompting entirely, add `--no-prompt` (requires `--url`) |
+| Exits without waiting for input | The environment is non-interactive (e.g. a scheduled task). Use `--url "..." --no-prompt` |
+| `config.json` is broken | Harmless: the script warns and continues with defaults. Delete the file and re-run to regenerate it |
+| Garbled log text | Console code-page issue. Run `chcp 65001`; `logs/tcm_scraper.log` is always valid UTF-8 |
+| 0 items collected / mostly `N/A` | Route A: see §3.3; Route B: see §4.1 to adjust selectors |
+| Login wall or CAPTCHA | The script neither logs in nor bypasses CAPTCHAs. **Use Route A** (log in and save pages manually) |
+| ChromeDriver fails to start | Make sure Chrome is installed and the network is available; the script tries Selenium Manager first, then falls back to webdriver-manager |
+| Cannot paginate / duplicate data | `next_page` selector mismatch, or the site uses JS pagination (find the real endpoint via F12 → Network and switch to `--mode requests`) |
+| Want it to run faster | Raising `--max-items` will not help — **the bottleneck is deliberate rate limiting**. Keep the 2–5 s interval; it is what avoids bans |
 
-## 8. 合规与伦理（请务必遵守）
+## 8. Compliance and ethics (please observe)
 
-- 本脚本仅用于学术研究，请遵守目标站点的 `robots.txt`、用户协议与服务条款（脚本默认已启用 robots 检查）
-- 默认 2~5 秒随机间隔与单页上限为刻意设计，**请勿为提升速度而调低**。高频请求可能导致 IP 封禁，并影响其他用户的正常使用
-- 采集到的说明书文本版权归原权利人所有。建议仅保留结构化字段用于研究，不得公开再分发全文
-- 本脚本及其输出**不构成任何用药建议**，不得用于医疗决策
+- This script is for academic research only. Respect the target site's `robots.txt`, terms of use, and
+  terms of service (the robots check is enabled by default).
+- The default 2–5 s random delay and the per-page cap are deliberate; **do not lower them**.
+  High-frequency requests may get your IP banned and degrade the service for other users.
+- The copyright of the scraped label text belongs to the original rights holders. Prefer keeping only
+  the structured fields for research; do not publicly redistribute the full text.
+- This script and its output **are not medical advice** and must not be used for clinical decisions.
 
-## 9. 目录结构
+## 9. Directory structure
 
 ```
 tcm-drug-scraper/
-├── tcm_scraper.py          # 入口脚本（python tcm_scraper.py 即可运行）
-├── tcm_scraper_lib/        # 实现代码，按职责拆分
-│   ├── config.py           # ★ 配置区：选择器、字段映射、默认参数（适配新站点主要修改此处）
-│   ├── utils.py            # 日志、文本清洗、限速、重试
-│   ├── fetch.py            # 页面获取（requests / selenium / 本地文件）+ robots.txt + 空结果诊断
-│   ├── parse.py            # 说明书字段解析（选择器 → 标注符号 → 标签节点）
-│   ├── crawl.py            # 列表页翻页、详情页遍历、本地文件夹批量解析
-│   ├── pipeline.py         # pandas 清洗、去重、CSV 导出
-│   └── cli.py              # 命令行参数、设置向导、主流程
-├── config.json             # 用户配置（网址、中药名、抓取条数）；首次运行自动生成，任意文本编辑器可改
-├── requirements.txt        # 依赖清单
-├── README.md               # 本文档
-├── saved_pages/            # 路线 A：手动保存的网页存放目录（需自行创建）
-├── output/                 # CSV 与原始 HTML 输出（可安全删除，建议加入 .gitignore）
-└── logs/                   # 运行日志（可安全删除，建议加入 .gitignore）
+├── tcm_scraper.py          # entry script (run with: python tcm_scraper.py)
+├── tcm_scraper_lib/        # implementation, split by responsibility
+│   ├── config.py           # ★ configuration: selectors, field mapping, default parameters (main file to edit for a new site)
+│   ├── utils.py            # logging, text cleaning, rate limiting, retry
+│   ├── fetch.py            # page fetching (requests / selenium / local file) + robots.txt + empty-result diagnosis
+│   ├── parse.py            # label-field parsing (selector → section marker → label node)
+│   ├── crawl.py            # listing-page pagination, detail-page traversal, local-folder batch parsing
+│   ├── pipeline.py         # pandas cleaning, de-duplication, CSV export
+│   └── cli.py              # command-line arguments, setup wizard, main flow
+├── config.json             # user config (URL, herb name, item count); auto-generated on first run, editable in any text editor
+├── requirements.txt        # dependency list
+├── README.md               # this document
+├── saved_pages/            # Route A: manually saved web pages (create it yourself)
+├── output/                 # CSV and raw-HTML output (safe to delete; add to .gitignore)
+└── logs/                   # run logs (safe to delete; add to .gitignore)
 ```
 
-`.gitignore` 建议：
+Suggested `.gitignore`:
 
 ```gitignore
 .venv/
