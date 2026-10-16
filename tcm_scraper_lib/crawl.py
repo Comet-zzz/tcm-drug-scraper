@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
-# 爬取主逻辑区：列表页翻页与详情页遍历（在线抓取），以及本地文件夹批量解析（离线）。
+# Crawling layer: listing-page pagination and detail-page traversal (online), plus batch parsing
+# of a local folder (offline).
 
 from __future__ import annotations
 
@@ -17,24 +18,24 @@ from .fetch import BaseFetcher, RequestsFetcher, diagnose_empty_result, read_htm
 from .parse import DrugPageParser, SelectorEngine
 from .utils import clean_text, polite_sleep, random_ua
 
-# 文件夹模式支持的网页后缀
+# Web-page extensions supported in folder mode
 SUPPORTED_PAGE_SUFFIXES: Tuple[str, ...] = (".html", ".htm", ".xhtml")
 
 
 def crawl_folder(cfg: Dict[str, Any], logger: logging.Logger) -> List[Dict[str, Any]]:
-    # 文件夹模式：把本地文件夹里的**每一个网页文件当成一份说明书**直接解析。
+    # Folder mode: treat **every page file** in a local folder as one label and parse it directly.
     #
-    # 这是为「人工登录后另存页面」这条路线准备的：
-    #     * 不需要列表页，不需要链接配对，不发起任何网络请求；
-    #     * 文件名会作为药品名称的兜底（所以建议存成「黄芩片.html」这样的名字）；
-    #     * 单个文件解析失败只跳过它，不影响其他文件。
+    # This serves the "log in manually, then save pages" route:
+    #     * no listing page, no link pairing, no network requests;
+    #     * the filename acts as a fallback for the drug name (so name files like "黄芩片.html");
+    #     * a single file failing only skips that file, never the rest.
     #
-    # 适用场景：目标数据库需要登录/付费，脚本不便（也不应）绕过时，
-    # 由使用者在浏览器中正常浏览并保存页面，脚本仅负责批量抽取字段。
+    # Use case: when the target database needs login/payment and the script should not (and will
+    # not) bypass it, the user browses and saves pages in a browser and the script only extracts.
     folder = Path(cfg["list_url"])
     if not folder.exists():
         logger.error(
-            "文件夹不存在：%s\n            请检查路径是否正确（Windows 路径示例：D:\\项目\\saved_pages），或先创建文件夹并保存页面。",
+            "Folder does not exist: %s\n            Check the path (Windows example: D:\\project\\saved_pages), or create the folder and save pages into it.",
             folder,
         )
         return []
@@ -43,66 +44,67 @@ def crawl_folder(cfg: Dict[str, Any], logger: logging.Logger) -> List[Dict[str, 
             p for p in folder.rglob("*") if p.is_file() and p.suffix.lower() in SUPPORTED_PAGE_SUFFIXES
         )
     except OSError as exc:
-        logger.error("读取文件夹失败：%s（%s）", folder, exc)
+        logger.error("Failed to read the folder: %s (%s)", folder, exc)
         return []
 
     if not files:
         logger.error(
-            "文件夹 %s 中未找到网页文件（支持 %s）。\n"
-            "            请确认：① 保存位置是否正确；② Chrome 另存为时是否选择「网页，仅 HTML」而非 .mhtml。",
-            folder.resolve(), "、".join(SUPPORTED_PAGE_SUFFIXES),
+            "No web pages found in folder %s (supported: %s).\n"
+            "            Check that (1) the save location is correct; (2) you chose \"Webpage, HTML Only\" rather than .mhtml.",
+            folder.resolve(), ", ".join(SUPPORTED_PAGE_SUFFIXES),
         )
         return []
 
-    logger.info("文件夹模式：在 %s 下发现 %d 个网页文件，逐个解析（不联网）", folder.resolve(), len(files))
+    logger.info("Folder mode: found %d page files under %s, parsing each (offline)", len(files), folder.resolve())
     keyword = (cfg.get("name_filter") or "").strip()
     if keyword:
         logger.info(
-            "说明：文件夹模式不进行关键词筛选，解析范围即所选文件夹中的全部网页（配置中的关键词「%s」不生效）",
+            "Note: folder mode does not filter by keyword; it parses every page in the chosen folder (the configured keyword \"%s\" is ignored)",
             keyword,
         )
     parser = DrugPageParser(SELECTORS, logger)
     records: List[Dict[str, Any]] = []
 
     for idx, path in enumerate(files, start=1):
-        logger.info("--- [%d/%d] 解析本地页面：%s", idx, len(files), path.name)
+        logger.info("--- [%d/%d] Parsing local page: %s", idx, len(files), path.name)
         try:
             html = read_html_file(path)
         except OSError as exc:
-            logger.error("读取失败，已跳过：%s（%s）", path.name, exc)
+            logger.error("Read failed, skipping: %s (%s)", path.name, exc)
             continue
 
         try:
-            # 文件名当药品名称兜底：所以建议把文件存成「药品名.html」
+            # The filename is used as a drug-name fallback, so name files "drugname.html"
             record = parser.parse(html, str(path.resolve()), hint_name=path.stem)
         except Exception as exc:
-            logger.exception("解析异常，已跳过：%s（%s）", path.name, exc)
+            logger.exception("Parse error, skipping: %s (%s)", path.name, exc)
             continue
 
         filled = sum(1 for col in FIELD_COLUMNS.values() if record.get(col))
-        logger.info("解析完成：%s（有效字段 %d/5）", record.get("药品名称") or path.stem, filled)
+        logger.info("Parsed: %s (%d/5 fields filled)", record.get("drug_name") or path.stem, filled)
         if filled <= 1:
             logger.warning(
-                "该文件仅解析出药品名称，可能是保存时页面尚未加载完成，或保存的是登录页：%s", path.name,
+                "Only the drug name was parsed from this file; the page may not have finished loading when saved, or a login page was saved: %s", path.name,
             )
         records.append(record)
 
-    logger.info("文件夹模式解析完毕：%d/%d 个文件产出了记录", len(records), len(files))
+    logger.info("Folder mode finished: %d/%d files produced a record", len(records), len(files))
     return records
 
 
 @dataclass
 class DetailLink:
-    # 列表页解析出的一个待抓取条目。
+    # One item to fetch, as parsed from a listing page.
 
     url: str
-    title: str = ""    # 链接锚文本（如「查看说明书」）
-    context: str = ""  # 所在条目容器的全文（含药品名称，用于关键词过滤）
-    name: str = ""     # 从条目中单独提取的药品名称（可用则为详情页兜底）
+    title: str = ""    # link anchor text (e.g. "view label")
+    context: str = ""  # full text of the containing row (includes the drug name; used for keyword filtering)
+    name: str = ""     # drug name extracted from the row separately (used as a detail-page fallback)
 
 
 class Crawler:
-    # 爬取调度器：负责列表页翻页、详情页遍历、以及全程的限速与容错。
+    # Crawl scheduler: listing-page pagination, detail-page traversal, and end-to-end pacing and
+    # fault tolerance.
 
     def __init__(self, cfg: Dict[str, Any], fetcher: BaseFetcher, logger: logging.Logger) -> None:
         self.cfg = cfg
@@ -110,34 +112,34 @@ class Crawler:
         self.logger = logger
         self.parser = DrugPageParser(SELECTORS, logger)
 
-    # ---------------- 列表页 ----------------
+    # ---------------- listing page ----------------
     def collect_detail_links(self, list_url: str) -> List[DetailLink]:
-        # 翻页收集详情页链接，受 max_pages / max_items / name_filter 约束。
+        # Paginate and collect detail-page links, bounded by max_pages / max_items / name_filter.
         links: List[DetailLink] = []
         seen: set = set()
         current_url: Optional[str] = list_url
         page_no = 1
-        parsed_count = 0    # 列表页上总共看到多少个条目
-        filtered_count = 0  # 其中被关键词筛掉多少个
+        parsed_count = 0    # how many items were seen on the listing pages
+        filtered_count = 0  # how many of them the keyword filtered out
 
         while current_url and page_no <= int(self.cfg["max_pages"]):
-            self.logger.info("--- 列表页第 %d 页：%s", page_no, current_url)
+            self.logger.info("--- Listing page %d: %s", page_no, current_url)
             if self.cfg["respect_robots"] and not robots_allows(current_url, random_ua(), self.logger):
-                self.logger.error("robots.txt 不允许抓取该列表页，已停止。")
+                self.logger.error("robots.txt disallows fetching this listing page; stopping.")
                 break
 
             try:
                 html = self._fetch_with_retry(current_url)
             except Exception as exc:
-                self.logger.error("列表页抓取失败，停止翻页：%s", exc)
+                self.logger.error("Listing page fetch failed; stopping pagination: %s", exc)
                 break
 
             self._maybe_dump_html(html, current_url, f"list_p{page_no}")
             page_links = self._parse_detail_links(html, current_url)
             parsed_count += len(page_links)
-            self.logger.info("第 %d 页解析到 %d 个候选条目", page_no, len(page_links))
+            self.logger.info("Page %d yielded %d candidate items", page_no, len(page_links))
 
-            # 一个条目都没解析出来：先判断页面本身是什么情况，再给出针对性提示
+            # Not a single item parsed: first work out what the page actually is, then give a targeted hint
             if not page_links:
                 diagnose_empty_result(html, current_url, self.logger)
                 break
@@ -148,12 +150,12 @@ class Crawler:
                     continue
                 if not self._passes_name_filter(link):
                     filtered_count += 1
-                    self.logger.debug("关键词过滤排除：%s", link.context or link.url)
+                    self.logger.debug("Excluded by keyword filter: %s", link.context or link.url)
                     continue
                 seen.add(key)
                 links.append(link)
                 if len(links) >= int(self.cfg["max_items"]):
-                    self.logger.info("已达 max_items=%s 上限，停止收集链接", self.cfg["max_items"])
+                    self.logger.info("Reached max_items=%s; stopping link collection", self.cfg["max_items"])
                     return links
 
             current_url = self._parse_next_page(html, current_url)
@@ -161,24 +163,24 @@ class Crawler:
             if current_url:
                 polite_sleep(self.cfg["min_delay"], self.cfg["max_delay"])
 
-        # 解析到了条目、但全被关键词筛掉：也要说清楚，免得用户以为脚本坏了
+        # Items were parsed but all filtered out: say so, so the user does not think the script broke
         if not links and filtered_count > 0:
             keyword = (self.cfg.get("name_filter") or "").strip()
             self.logger.error(
-                "页面上解析到 %d 个条目，但全部被关键词「%s」筛除，未保留任何条目。\n"
-                "            如需采集全部条目：在设置向导第 2 步输入「全部」，或使用 --no-filter 参数重新运行。",
+                "Parsed %d items on the page, but all were removed by the keyword \"%s\", leaving none.\n"
+                "            To collect everything: at wizard step 2 type \"all\", or re-run with --no-filter.",
                 parsed_count, keyword,
             )
         return links
 
     def _parse_detail_links(self, html: str, base_url: str) -> List[DetailLink]:
-        # 从列表页 HTML 中提取条目容器里的详情链接、名称与上下文。
+        # Extract the detail link, name and context from each item container on the listing page.
         engine = SelectorEngine(html, self.logger)
         list_sel = SELECTORS["list"]
         results: List[DetailLink] = []
 
         for item in engine.find_nodes(list_sel.get("item", [])):
-            # 条目容器的完整 HTML 片段 → 在其中定位详情链接，拿到 (href, 锚文本)
+            # The item container's full HTML fragment -> locate the detail link within it as (href, anchor text)
             fragment = SelectorEngine(item.html or "", self.logger)
             for href, anchor_text in fragment.find_links(list_sel.get("item_link", [])):
                 url = self._normalize_url(href, base_url)
@@ -192,11 +194,12 @@ class Crawler:
                         name=self._extract_item_name(fragment, anchor_text),
                     )
                 )
-                break  # 一个条目只取第一条链接，避免抓到「更多」等附属链接
+                break  # only the first link per item, to avoid grabbing "more" and similar links
 
-        # 兜底：如果条目容器选择器没配好，直接在整页里找所有链接，用 URL 特征过滤
+        # Fallback: if the item-container selector is not configured, look for all links on the page
+        # and filter them by URL features
         if not results:
-            self.logger.warning("条目选择器未命中，回退为「全页链接 + URL 特征过滤」策略")
+            self.logger.warning("Item selector did not match; falling back to \"all links + URL-feature filter\"")
             for href, anchor_text in engine.find_links(list_sel.get("item_link", ["a::attr(href)"])):
                 url = self._normalize_url(href, base_url)
                 if url and self._looks_like_detail(url):
@@ -204,10 +207,11 @@ class Crawler:
         return results
 
     def _extract_item_name(self, fragment: SelectorEngine, anchor_text: str) -> str:
-        # 从条目片段中提取药品名称。
+        # Extract the drug name from the item fragment.
         #
-        # 注意：有些列表页的链接文字是「查看说明书」这类操作词，不能当药名用，
-        # 因此这里用黑名单 + 长度限制把它排除，宁可返回空也不要污染后续字段。
+        # Note: some listing pages use action words like "查看说明书" as the link text, which must not
+        # be used as a drug name; a blocklist plus a length cap excludes them, preferring an empty
+        # result over contaminating later fields.
         blacklist = {"查看说明书", "查看", "详情", "详细信息", "更多", "查询", "说明书", "点击查看"}
         for node in fragment.find_nodes(SELECTORS["list"].get("item_name", [])):
             candidate = clean_text(node.text)
@@ -219,26 +223,26 @@ class Crawler:
         return ""
 
     def _parse_next_page(self, html: str, base_url: str) -> Optional[str]:
-        # 解析「下一页」链接；取不到就返回 None 结束翻页。
+        # Parse the "next page" link; return None to end pagination when it cannot be found.
         engine = SelectorEngine(html, self.logger)
         nodes = engine.find_nodes(SELECTORS["list"].get("next_page", []))
         if not nodes:
             return None
         href = nodes[0].attrs.get("href") or nodes[0].text
         nxt = self._normalize_url(href, base_url)
-        # 与当前页相同（JS 分页常见）或为空则视为没有下一页
+        # Same as the current page (common with JS pagination) or empty -> treat as no next page
         return nxt if nxt and nxt != base_url else None
 
     @staticmethod
     def _normalize_url(href: str, base_url: str) -> Optional[str]:
-        # 相对链接转绝对链接，过滤 javascript:/# 等无效链接。
+        # Turn relative links into absolute ones and drop invalid links such as javascript:/#.
         href = (href or "").strip()
         if not href or href.startswith(("javascript:", "#", "void(")) or href.lower().startswith("mailto:"):
             return None
         return urljoin(base_url, href)
 
     def _looks_like_detail(self, url: str) -> bool:
-        # 粗判链接是否像详情页（过滤导航、分页、首页等噪声链接）。
+        # Rough check that a link looks like a detail page (filters out navigation, pagination, home, etc.).
         keyword = (self.cfg.get("detail_link_keyword") or "").strip()
         if keyword:
             return keyword in url
@@ -248,84 +252,85 @@ class Crawler:
         return bool(re.search(r"(detail|content|info|show|view|id=|\.html)", lowered))
 
     def _passes_name_filter(self, link: DetailLink) -> bool:
-        # 按关键词过滤条目（例如只看「黄芩」相关药品）。
+        # Filter items by keyword (e.g. only 黄芩-related drugs).
         #
-        # 判断顺序：整行上下文 → 单独提取的名称 → 链接锚文本。
-        # 之所以优先用整行上下文，是因为很多列表页的链接文字是「查看说明书」，
-        # 真正的药名在行内的其他单元格里。
+        # Order of checks: full row context -> separately extracted name -> link anchor text.
+        # The full context is preferred because many listing pages use "查看说明书" as the link text,
+        # with the real drug name in another cell of the row.
         keyword = (self.cfg.get("name_filter") or "").strip()
         if not keyword:
             return True
         haystack = " ".join(filter(None, (link.context, link.name, link.title)))
         if not haystack:
-            return True  # 什么都取不到时保守放行，交给解析阶段判定
+            return True  # conservative pass when nothing could be read; the parse stage decides
         return keyword in haystack
 
-    # ---------------- 详情页 ----------------
+    # ---------------- detail page ----------------
     def crawl_details(self, links: Iterable[DetailLink]) -> List[Dict[str, Any]]:
-        # 逐条抓取详情页并解析，单条失败只记录日志、不中断整体流程。
+        # Fetch and parse each detail page; a single failure is logged and does not abort the run.
         records: List[Dict[str, Any]] = []
         links = list(links)
 
         for idx, link in enumerate(links, start=1):
-            self.logger.info("--- [%d/%d] 抓取详情：%s", idx, len(links), link.url)
+            self.logger.info("--- [%d/%d] Fetching detail: %s", idx, len(links), link.url)
             if self.cfg["respect_robots"] and not robots_allows(link.url, random_ua(), self.logger):
-                self.logger.warning("robots.txt 禁止，跳过：%s", link.url)
+                self.logger.warning("robots.txt disallows it; skipping: %s", link.url)
                 continue
 
             try:
                 html = self._fetch_with_retry(link.url)
                 self._maybe_dump_html(html, link.url, f"detail_{idx}")
             except Exception as exc:
-                self.logger.error("详情页抓取失败，已跳过：%s（%s）", link.url, exc)
+                self.logger.error("Detail page fetch failed, skipping: %s (%s)", link.url, exc)
                 continue
 
             try:
                 record = self.parser.parse(html, link.url, hint_name=link.name or None)
-            except Exception as exc:  # 解析异常同样不能中断整体
-                self.logger.exception("详情页解析异常，已跳过：%s（%s）", link.url, exc)
+            except Exception as exc:  # a parse error must not abort the whole run either
+                self.logger.exception("Detail page parse error, skipping: %s (%s)", link.url, exc)
                 continue
 
             filled = sum(1 for col in FIELD_COLUMNS.values() if record.get(col))
-            self.logger.info("解析完成：%s（有效字段 %d/5）", record.get("药品名称") or "未知", filled)
+            self.logger.info("Parsed: %s (%d/5 fields filled)", record.get("drug_name") or "unknown", filled)
             records.append(record)
 
-            # 限速：最后一条之后不再休眠，节省时间
+            # Rate limiting: no sleep after the last item, to save time
             if idx < len(links):
                 polite_sleep(self.cfg["min_delay"], self.cfg["max_delay"])
 
         return records
 
-    # ---------------- 通用：带重试的取页 ----------------
+    # ---------------- shared: fetch a page with retries ----------------
     def _fetch_with_retry(self, url: str) -> str:
-        # 带重试与超时的取页封装。
+        # Fetch wrapper with retries and a timeout.
         #
-        # tenacity 可用时由构造 RequestFetcher 时注入重试；Selenium 与 Local 模式
-        # 则在这里统一套一层重试，保证任何一种模式下都有 3 次尝试机会。
+        # When tenacity is available, RequestsFetcher injects retries at construction; for Selenium
+        # and Local modes this wraps a retry layer here, so every mode gets max_retries attempts.
         max_attempts = int(self.cfg["max_retries"])
 
         if isinstance(self.fetcher, RequestsFetcher):
-            return self.fetcher.get_html(url)  # 重试已在 RequestsFetcher 内部完成
+            return self.fetcher.get_html(url)  # retries already handled inside RequestsFetcher
 
         last_exc: Optional[BaseException] = None
         for attempt in range(1, max_attempts + 1):
             try:
                 if attempt > 1:
-                    self.logger.info("第 %d/%d 次重试：%s", attempt, max_attempts, url)
+                    self.logger.info("Retry %d/%d: %s", attempt, max_attempts, url)
                 return self.fetcher.get_html(url)
             except Exception as exc:
                 last_exc = exc
                 if attempt >= max_attempts:
                     break
                 wait = 1.5 * (2 ** (attempt - 1)) * random.uniform(0.8, 1.2)
-                self.logger.warning("取页失败：%s；%.1f 秒后重试", exc, wait)
+                self.logger.warning("Fetch failed: %s; retrying in %.1fs", exc, wait)
                 time.sleep(wait)
         assert last_exc is not None
         raise last_exc
 
-    # ---------------- 原始 HTML 落盘（可选） ----------------
+    # ---------------- optional raw-HTML dump ----------------
     def _maybe_dump_html(self, html: str, url: str, tag: str) -> None:
-        # 保存原始 HTML：调试选择器时非常有用——一次抓取、反复解析，无需重复请求对方站点。
+        # Save the raw HTML: very useful when tuning selectors -- fetch once, replay parsing many times
+        # without re-requesting the target site.
         if not self.cfg.get("save_raw_html"):
             return
         try:
@@ -334,6 +339,6 @@ class Crawler:
             safe = re.sub(r"[^\w.-]+", "_", f"{tag}_{url}")[:120]
             path = out_dir / f"{safe}.html"
             path.write_text(html, encoding="utf-8")
-            self.logger.debug("原始 HTML 已保存：%s", path)
+            self.logger.debug("Raw HTML saved: %s", path)
         except Exception as exc:  # pragma: no cover
-            self.logger.debug("保存原始 HTML 失败（可忽略）：%s", exc)
+            self.logger.debug("Failed to save raw HTML (ignorable): %s", exc)

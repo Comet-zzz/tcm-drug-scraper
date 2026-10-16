@@ -1,37 +1,38 @@
 # -*- coding: utf-8 -*-
-# 配置与常量：选择器、字段映射、默认运行参数。
+# Configuration and constants: selectors, field mapping, default run parameters.
 #
-# ★ 适配新站点时，改动主要集中在本文件。
+# When adapting to a new site, almost all edits belong in this file.
 
 from __future__ import annotations
 
 from pathlib import Path
 from typing import Any, Dict, List
 
-# 项目根目录（即入口脚本 tcm_scraper.py 所在目录），用于定位 config.json 等项目文件。
+# Project root (the directory holding the entry script tcm_scraper.py); used to locate config.json.
 PROJECT_ROOT: Path = Path(__file__).resolve().parent.parent
 
-# ---------------- 1. 配置区（★ 真实站点适配时，80% 的改动都在这里） ----------------
+# ---------------- 1. Configuration area (about 80% of site-adaptation edits go here) ----------------
 #
-# ★ 目标网址无需在此修改：
-#   运行脚本时按设置向导填写，结果会自动保存到同目录的 config.json，下次回车沿用；
-#   也可直接编辑 config.json，或在命令行用 --url 指定。
-#   DEFAULT_CONFIG["list_url"] 仅为首次运行前的占位值。
+# The target URL is NOT set here:
+#   It is entered in the setup wizard and saved to config.json next to the script, then reused on
+#   later runs by pressing Enter; you can also edit config.json directly or pass --url on the
+#   command line. DEFAULT_CONFIG["list_url"] is only a placeholder used before the first run.
 #
-# ① 选择器：SELECTORS 中每个字段给的是「候选列表」，解析时按顺序尝试，
-#    命中第一个能取到内容的即可。站点改版时只需在前面补充一条新选择器，
-#    无需删除旧配置。
+# (1) Selectors: every entry in SELECTORS is a "candidate list". Parsing tries them in order and
+#     keeps the first one that returns content. When a site is redesigned, just prepend a new
+#     selector; there is no need to delete the old ones.
 #
-#    选择器写法约定（本脚本自定义，见 utils.is_xpath()）：
-#      - 以 "//"、"./"、"(" 开头，或带 "xpath:" 前缀  →  按 XPath 解析（需要 lxml）
-#      - 其他写法                                     →  按 CSS Selector 解析（BeautifulSoup）
-#    想抓取链接地址时，在选择器后加 "::attr(href)"（XPath 模式自动返回 @href）。
+#     Selector syntax conventions (custom to this script, see utils.is_xpath()):
+#       - starts with "//", "./", "(" or carries an "xpath:" prefix  -> parsed as XPath (needs lxml)
+#       - anything else                                             -> parsed as a CSS selector (BeautifulSoup)
+#     To extract a link target, append "::attr(href)" to the selector (XPath mode returns @href automatically).
 #
-# ② 三级回退：即便选择器全部失效，脚本仍会用「【不良反应】」这类中文说明书标注符号，
-#    以及「标签节点 + 值节点」的通用结构兜底抽取，因此可先运行验证，再逐步调整选择器。
+# (2) Three-tier fallback: even if every selector fails, the script still falls back to Chinese
+#     label markers such as "【不良反应】" and to a generic "label node + value node" scan, so you can
+#     run it first and refine selectors afterwards.
 
 USER_AGENTS: List[str] = [
-    # 随机 User-Agent 池：降低被单一指纹识别为爬虫的概率。
+    # Pool of random User-Agents: reduces the chance of being fingerprinted as a single crawler.
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) "
     "Chrome/124.0.0.0 Safari/537.36",
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) "
@@ -45,14 +46,15 @@ USER_AGENTS: List[str] = [
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:124.0) Gecko/20100101 Firefox/124.0",
 ]
 
-# 中文说明书的标准标注符号。第二级回退解析会用它定位字段区间。
-# 例：正文中出现「【不良反应】偶见皮疹…【禁忌】尚不明确」时，可精确切出两段。
-# ★ 注意：{labels} 外围必须加 (?:…) 非捕获组。否则 "主要成分|成份|成分" 这类
-#    多别名会被整条正则的 | 拆散，导致「成分」二字在「【主要成分】」内部被单独匹配到，
-#    结果把标注符号的右括号 "】" 残留在字段值开头。
+# Standard Chinese label markers, e.g. "【不良反应】". The second-tier fallback uses them to delimit
+# a field's text. Example: given "【不良反应】偶见皮疹…【禁忌】尚不明确" in the body, it can cut the
+# two segments apart precisely.
+# NOTE: {labels} must be wrapped in a (?:...) non-capturing group. Otherwise a multi-alias
+#     alternation such as "主要成分|成份|成分" is torn apart by the regex's top-level "|", and
+#     "成分" gets matched inside "【主要成分】", leaving the closing "】" at the start of the value.
 LABEL_SECTION_RE = r"[【\[]\s*(?:{labels})\s*[】\]]"
 
-# 各字段对应的中文标签别名（用于第二、三级回退解析，可按需扩充）
+# Chinese label aliases per field (used by the second- and third-tier fallback; extend as needed).
 FIELD_LABELS: Dict[str, List[str]] = {
     "drug_name": ["药品名称", "通用名称", "品名", "名称"],
     "ingredients": ["主要成分", "主要成份", "成份", "成分", "主要成份及含量", "处方", "成份/药理作用"],
@@ -61,34 +63,34 @@ FIELD_LABELS: Dict[str, List[str]] = {
     "precautions": ["注意事项", "注意", "警告", "特别提示"],
 }
 
-# 字段名（英文 key） ↔ 输出 CSV 列名（中文）的映射，顺序即 CSV 列顺序
+# Maps a field key to its CSV column name; the order here is the CSV column order.
 FIELD_COLUMNS: Dict[str, str] = {
-    "drug_name": "药品名称",
-    "ingredients": "主要成分",
-    "adverse_reactions": "不良反应",
-    "contraindications": "禁忌",
-    "precautions": "注意事项",
+    "drug_name": "drug_name",
+    "ingredients": "ingredients",
+    "adverse_reactions": "adverse_reactions",
+    "contraindications": "contraindications",
+    "precautions": "precautions",
 }
 
 SELECTORS: Dict[str, Any] = {
-    # ---------------- 列表页（搜索结果页） ----------------
+    # ---------------- Listing page (search-results page) ----------------
     "list": {
-        # 单个药品结果条目（定位到条目容器，便于同时取标题与链接）
+        # A single result row (located at the container so both title and link can be read)
         "item": [
-            # 药源网（yaopinnet.com）说明书列表：div#c_list1 / div#c_list2 两个 ul
+            # Yaopinnet label listing: two uls under div#c_list1 / div#c_list2
             "div[id^='c_list'] li",
             "table tbody tr",
             "div.result-list div.item",
             "ul.list li",
             "//table//tr[td]",
         ],
-        # 条目内的详情页链接
+        # Detail-page link inside a row
         "item_link": [
             "a::attr(href)",
             "//a[@href]",
         ],
-        # 条目内的药品名称节点（用于关键词过滤和详情页名称兜底；
-        # 没配也没关系，脚本会退回用整行文本做过滤）
+        # Drug-name node inside a row (used for keyword filtering and as a detail-page name fallback;
+        # if absent the script falls back to the whole row text for filtering)
         "item_name": [
             "td.name",
             "span.name",
@@ -96,21 +98,21 @@ SELECTORS: Dict[str, Any] = {
             "h3",
             "h4",
         ],
-        # 下一页按钮/链接（取不到就认为只有一页）
+        # Next-page button/link (if not found, only one page is assumed)
         "next_page": [
-            # 药源网：当前页码是 <span>，紧随其后的第一个 <a> 即下一页
+            # Yaopinnet: the current page number is a <span>; the first following <a> is the next page
             "//div[@id='sms_page']/span/following-sibling::a[1]",
             "a.next::attr(href)",
             "a[title='下一页']::attr(href)",
             "//a[contains(text(),'下一页')]",
             "//a[contains(@class,'next')]",
         ],
-        # 等待列表渲染完成的元素（Selenium 模式下用，空字符串表示不等待）
+        # Element to wait for before the listing is considered rendered (Selenium only; "" = no wait)
         "wait_for": "table tbody tr",
     },
-    # ---------------- 详情页（说明书页） ----------------
+    # ---------------- Detail page (label page) ----------------
     "detail": {
-        # 药品名称：常见于 h1 / h2 / 详情页标题 / 面包屑
+        # Drug name: usually in h1 / h2 / the detail title / breadcrumb
         "drug_name": [
             "h1.drug-name",
             "div.detail-title h1",
@@ -121,10 +123,11 @@ SELECTORS: Dict[str, Any] = {
             "//h2[1]",
             "//*[contains(@class,'title')]/h1",
         ],
-        # 以下四个字段均按「选择器 → 标注符号 → 标签节点」三级回退。
-        # ★ 注意 XPath 里的 string-length 限制：它用来确保命中的是「短的标签本身」，
-        #    而不是「装着整段内容的容器」。否则遇到「<div>【主要成分】黄芩…</div>」这种
-        #    标签与内容同处一个元素的版式，following-sibling 会误取到下一个字段的内容。
+        # The four fields below each fall back through "selector -> section marker -> label node".
+        # NOTE on the string-length guard in the XPath: it ensures the match is the short label
+        #     itself, not a container that wraps the whole paragraph. Otherwise, for layouts like
+        #     "<div>【主要成分】黄芩…</div>" where label and content share one element,
+        #     following-sibling would wrongly pick up the next field's content.
         "ingredients": [
             "div.field-ingredients div.content",
             "div.ingredients",
@@ -149,40 +152,41 @@ SELECTORS: Dict[str, Any] = {
             "//*[contains(text(),'注意事项') and string-length(normalize-space(.)) < 14]"
             "/following-sibling::*[1]",
         ],
-        # 等待详情渲染完成的元素
+        # Element to wait for before the detail page is considered rendered
         "wait_for": "body",
     },
 }
 
-# 默认运行参数（可被命令行参数覆盖）
+# Default run parameters (overridable by command-line arguments)
 DEFAULT_CONFIG: Dict[str, Any] = {
-    "list_url": "https://www.nmpa.gov.cn/datasearch/home-index.html#category=yp",  # ★ 目标URL
-    "mode": "selenium",            # "selenium"（默认，支持动态加载） 或 "requests"（快，静态页）
-    "headless": True,              # Selenium 是否无头模式
-    "min_delay": 2.0,              # 请求间随机休眠下限（秒）
-    "max_delay": 5.0,              # 请求间随机休眠上限（秒）
-    "max_retries": 3,              # 单次请求最大重试次数（含首次）
-    "timeout": 30,                 # 单页超时（秒）
-    "max_items": 20,               # 最多抓取多少条详情（建议先用小样本验证）
-    "max_pages": 3,                # 最多翻多少页列表
-    "name_filter": "",             # 关键词过滤：仅采集名称含该词的条目；留空表示不筛选
+    "list_url": "https://www.nmpa.gov.cn/datasearch/home-index.html#category=yp",  # target URL
+    "mode": "selenium",            # "selenium" (default, dynamic pages) or "requests" (fast, static pages)
+    "headless": True,              # whether Selenium runs headless
+    "min_delay": 2.0,              # lower bound of the random sleep between requests (seconds)
+    "max_delay": 5.0,              # upper bound of the random sleep between requests (seconds)
+    "max_retries": 3,              # max retries per request (including the first attempt)
+    "timeout": 30,                 # per-page timeout (seconds)
+    "max_items": 20,               # max detail pages to fetch (validate on a small sample first)
+    "max_pages": 3,                # max listing pages to paginate
+    "name_filter": "",             # keyword filter: only collect names containing this term; "" = no filter
     "out_csv": "output/tcm_drug_data.csv",
     "log_file": "logs/tcm_scraper.log",
-    "respect_robots": True,        # 是否遵守 robots.txt
-    "save_raw_html": False,        # 是否把原始 HTML 落盘（便于事后重放解析，无需重新请求）
+    "respect_robots": True,        # whether to honour robots.txt
+    "save_raw_html": False,        # whether to dump raw HTML to disk (for replaying parsing without re-requesting)
     "raw_html_dir": "output/raw_html",
 }
 
-# 配置文件：脚本第一次运行会自动生成，用记事本就能改，不需要懂 Python
+# Config file: auto-generated on first run, editable in Notepad, no Python knowledge required.
 CONFIG_FILE_NAME = "config.json"
-# 允许写进配置文件、也允许被记住的设置项（其余内部参数不落盘，避免配置文件太复杂）
+# Settings that may be written to and read back from the config file (internal parameters are not
+# persisted, to keep the config file simple).
 PERSISTED_KEYS: List[str] = [
-    "list_url",      # 要抓的网页地址
-    "name_filter",   # 目标中药名（空字符串 = 不过滤）
-    "max_items",     # 最多抓多少条
-    "max_pages",     # 最多翻多少页
+    "list_url",      # page to collect
+    "name_filter",   # target herb name ("" = no filter)
+    "max_items",     # max items to collect
+    "max_pages",     # max listing pages
     "mode",          # selenium / requests / local
-    "headless",      # 是否后台运行浏览器
+    "headless",      # run the browser in the background or not
     "min_delay",
     "max_delay",
 ]

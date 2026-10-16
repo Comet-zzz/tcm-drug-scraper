@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-# 数据处理区：pandas 清洗 + 去重 + CSV 导出。
+# Data-processing layer: pandas cleaning + de-duplication + CSV export.
 
 from __future__ import annotations
 
@@ -12,60 +12,61 @@ from .utils import clean_cell
 
 try:
     import pandas as pd
-except ImportError:  # pragma: no cover - 环境缺失时给出可执行提示
+except ImportError:  # pragma: no cover - actionable message when the environment lacks it
     pd = None  # type: ignore[assignment]
 
 
 def build_dataframe(records: Sequence[Dict[str, Any]], logger: logging.Logger):
-    # 把解析结果列表转成 DataFrame，做统一清洗、缺失统计与去重。
+    # Turn the parsed records into a DataFrame with uniform cleaning, missing-value stats and de-duplication.
     if pd is None:
-        raise RuntimeError("未安装 pandas，请执行：pip install pandas")
+        raise RuntimeError("pandas is not installed. Run: pip install pandas")
 
-    columns = list(FIELD_COLUMNS.values()) + ["数据来源URL", "抓取时间"]
+    columns = list(FIELD_COLUMNS.values()) + ["source_url", "scraped_at"]
     if not records:
-        logger.warning("没有采集到任何记录，仅导出带表头的空 CSV")
+        logger.warning("No records collected; exporting an empty CSV with only the header row")
         return pd.DataFrame(columns=columns), columns
 
     df = pd.DataFrame(records)
 
-    # 1) 列顺序与缺列补齐
+    # 1) Column order and fill in any missing columns
     for col in columns:
         if col not in df.columns:
             df[col] = None
     df = df[columns]
 
-    # 2) 逐字段二次清洗（选择器命中的文本可能仍含换行、全角空格等）
+    # 2) Second-pass cleaning per field (a selector hit may still contain newlines, full-width spaces, etc.)
     text_cols = list(FIELD_COLUMNS.values())
     for col in text_cols:
         df[col] = df[col].map(clean_cell)
 
-    # 3) 缺失统计（写入日志，方便判断是选择器失效还是页面本身没写）
+    # 3) Missing-value stats (written to the log to tell a failed selector from a genuinely empty page)
     missing_report = {col: int(df[col].isna().sum()) for col in text_cols}
-    logger.info("字段缺失统计：%s", missing_report)
+    logger.info("Missing-value stats: %s", missing_report)
 
-    # 4) 丢弃无药品名称的行（名称是后续 LLM 抽取的主键，缺失则无研究价值）
+    # 4) Drop rows with no drug name (the name is the primary key for downstream LLM extraction)
     before = len(df)
-    df = df[df["药品名称"].notna() & (df["药品名称"].astype(str).str.strip() != "")]
+    df = df[df["drug_name"].notna() & (df["drug_name"].astype(str).str.strip() != "")]
     dropped = before - len(df)
     if dropped:
-        logger.warning("丢弃 %d 条无药品名称的记录", dropped)
+        logger.warning("Dropped %d record(s) without a drug name", dropped)
 
-    # 5) 去重：先按「药品名称 + 主要成分」业务键去重，再按整行去重
+    # 5) De-duplication: first by the business key "drug_name + ingredients", then by the whole row
     before = len(df)
-    df = df.drop_duplicates(subset=[c for c in ["药品名称", "主要成分"] if c in df.columns], keep="first")
-    df = df.drop_duplicates(subset=["药品名称", "数据来源URL"], keep="first")
-    logger.info("去重：%d → %d 条", before, len(df))
+    df = df.drop_duplicates(subset=[c for c in ["drug_name", "ingredients"] if c in df.columns], keep="first")
+    df = df.drop_duplicates(subset=["drug_name", "source_url"], keep="first")
+    logger.info("De-duplication: %d -> %d rows", before, len(df))
 
-    # 6) 排序 + 重置索引
-    df = df.sort_values(by=["药品名称"], kind="stable").reset_index(drop=True)
+    # 6) Sort + reset index
+    df = df.sort_values(by=["drug_name"], kind="stable").reset_index(drop=True)
     return df, columns
 
 
 def export_csv(df, columns: Sequence[str], out_path: str, logger: logging.Logger) -> Path:
-    # 导出 CSV。
+    # Export the CSV.
     #
-    # 关键点：encoding="utf-8-sig" —— 带 BOM，Excel 双击打开中文不乱码。
-    # 缺失值统一填 "N/A"，便于后续 LLM 抽取时区分「页面没写」与「解析失败」。
+    # Key point: encoding="utf-8-sig" -- includes the BOM so Excel opens the Chinese text without
+    # mojibake. Missing values are filled with "N/A" so downstream LLM extraction can tell "the page
+    # did not state it" from "parsing failed".
     path = Path(out_path)
     path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -76,5 +77,5 @@ def export_csv(df, columns: Sequence[str], out_path: str, logger: logging.Logger
     out = out[list(columns)].fillna("N/A")
 
     out.to_csv(path, index=False, encoding="utf-8-sig")
-    logger.info("已导出 %d 条记录 → %s（UTF-8-SIG）", len(out), path.resolve())
+    logger.info("Exported %d record(s) -> %s (UTF-8-SIG)", len(out), path.resolve())
     return path

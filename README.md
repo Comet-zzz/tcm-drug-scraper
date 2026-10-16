@@ -6,12 +6,12 @@ site, Yaopinnet), cleans and de-duplicates them, and exports a UTF-8-SIG CSV for
 LLM-based toxicity extraction and database construction. The target address and keyword are entered
 through a setup wizard and can be left unfiltered by default.
 
-Collected fields: `药品名称` (drug name), `主要成分` (main ingredients), `不良反应` (adverse reactions),
-`禁忌` (contraindications), `注意事项` (precautions) — plus `数据来源URL` (source URL) and
-`抓取时间` (scrape timestamp) for provenance.
+Collected fields: `drug_name`, `ingredients`, `adverse_reactions`, `contraindications`, `precautions`
+— plus `source_url` and `scraped_at` for provenance.
 
-> The tool targets Chinese-language drug-label pages, so the CSV column names, the section markers
-> such as `【不良反应】`, and the interactive console prompts are in Chinese.
+> The tool targets Chinese-language drug-label pages, so the collected **values** and the section
+> markers used during parsing (such as `【不良反应】`) are in Chinese. The column names, console
+> output and documentation are in English.
 
 ---
 
@@ -72,11 +72,11 @@ Also do **not** save as `.mhtml`, which the script does not support.)
 At the first prompt, paste the **folder path** and the script recognises it as "folder mode":
 
 ```
-【第 1 步 / 共 3 步】请输入目标地址，支持以下三种形式：
-    1. 搜索结果页网址（http/https 开头）：由脚本联网采集
-    2. 本地文件夹路径：批量解析已保存的网页（不联网）
-    目标地址 > saved_pages
-    √ 已识别为本地文件夹：将以「解析已保存网页」模式运行（不联网）。
+[Step 1 / 3] Enter the target address. Three forms are supported:
+    1. Search-results page URL (starts with http/https): the script collects online
+    2. Local folder path: batch-parse already-saved pages (offline)
+    Target > saved_pages
+    OK Recognised as a local folder: running in "parse saved pages" mode (offline).
 ```
 
 To copy the folder path: open the `saved_pages` folder, click the address bar, and copy the full path
@@ -99,7 +99,7 @@ Open `output\tcm_drug_data.csv` in Excel (generated automatically, UTF-8-SIG, no
 - A drug is missing → check whether the file was saved as `.mhtml`, or into a different folder
 
 Once the results look right, add more saved pages in the same way and re-run (duplicates are removed
-automatically by `药品名称 + 主要成分`).
+automatically by `drug_name + ingredients`).
 
 ## 4. Route B: automated online collection
 
@@ -125,17 +125,17 @@ There are **three** ways to specify the target, ordered by preference:
 Paste the URL and press Enter at the prompt:
 
 ```
-【第 1 步 / 共 3 步】请输入目标地址，支持以下三种形式：
-    1. 搜索结果页网址（http/https 开头）：由脚本联网采集
-    2. 本地文件夹路径：批量解析已保存的网页（不联网）
-    输入 q 退出
-    目标地址 >  https://你要抓的搜索结果页
+[Step 1 / 3] Enter the target address. Three forms are supported:
+    1. Search-results page URL (starts with http/https): the script collects online
+    2. Local folder path: batch-parse already-saved pages (offline)
+    Type q to quit
+    Target >  https://your-search-results-page
 ```
 
 - After the three questions (target address / herb name / item count), collection starts
 - The answers are written to `config.json`, so **subsequent runs can just press Enter**
 - To change the address, re-run and enter a new one
-- At step 2, pressing Enter keeps the current setting; entering `全部` (all) disables filtering
+- At step 2, pressing Enter keeps the current setting; entering `all` disables filtering
 
 ### Option 2: edit `config.json`
 
@@ -263,7 +263,7 @@ Common parameters:
 - Encoding: **UTF-8-SIG (with BOM)** so Excel opens the Chinese text without mojibake
 - Missing values: filled with `N/A` (note that `N/A` is Excel's/pandas' default NA marker; read with
   `keep_default_na=False` to preserve it)
-- De-duplication: first by `药品名称 + 主要成分`, then by `药品名称 + 数据来源URL`
+- De-duplication: first by `drug_name + ingredients`, then by `drug_name + source_url`
 - Records without a drug name are dropped (the name is the primary key for downstream LLM extraction)
 - Logs: written to the console and to `logs/tcm_scraper.log` (UTF-8, with per-field hit/miss detail)
 

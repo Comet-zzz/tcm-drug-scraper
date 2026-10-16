@@ -1,9 +1,9 @@
 # -*- coding: utf-8 -*-
-# 解析区（选择器 / 标注符号 / 标签节点 三级回退）。
+# Parsing layer (selector / section marker / label node -- three-tier fallback).
 #
-# 第 1 级：config.SELECTORS 中的 CSS / XPath 选择器（最精确，优先）
-# 第 2 级：中文说明书标注符号正则（【不良反应】…【禁忌】…）
-# 第 3 级：标签节点 / 表格对通用扫描
+# Tier 1: CSS / XPath selectors from config.SELECTORS (most precise, tried first)
+# Tier 2: Chinese label-marker regex (【不良反应】…【禁忌】…)
+# Tier 3: generic label-node / table-pair scan
 
 from __future__ import annotations
 
@@ -19,7 +19,7 @@ except ImportError:  # pragma: no cover
     BeautifulSoup = None  # type: ignore[assignment]
 
 try:
-    # lxml 用于支持 XPath 选择器（BeautifulSoup 原生只支持 CSS）。
+    # lxml enables XPath selectors (BeautifulSoup alone supports only CSS).
     import lxml.html as lxml_html  # type: ignore
     import lxml.etree as lxml_etree  # type: ignore
 except ImportError:  # pragma: no cover
@@ -32,60 +32,61 @@ from .utils import clean_text, is_xpath, normalize_label, strip_xpath_prefix, wa
 
 @dataclass
 class Node:
-    # 统一的节点封装，屏蔽 BeautifulSoup 与 lxml 的 API 差异。
+    # Unified node wrapper that hides the API differences between BeautifulSoup and lxml.
 
     text: str
     attrs: Dict[str, str] = field(default_factory=dict)
-    html: str = ""  # 该节点的内部 HTML（调试用）
+    html: str = ""  # the node's inner HTML (for debugging)
 
 
 class SelectorEngine:
-    # 选择器引擎：同时支持 CSS Selector（BeautifulSoup）与 XPath（lxml）。
+    # Selector engine: supports both CSS selectors (BeautifulSoup) and XPath (lxml).
     #
-    # 之所以两者都支持，是因为 F12 里「Copy → Copy selector」得到的是 CSS，
-    # 而「Copy → Copy XPath」得到的是 XPath，两种方式均会用到。
+    # Both are supported because F12's "Copy -> Copy selector" yields CSS while
+    # "Copy -> Copy XPath" yields XPath, and either may be needed.
 
     def __init__(self, html: str, logger: logging.Logger) -> None:
         if BeautifulSoup is None:
-            raise RuntimeError("未安装 beautifulsoup4，请执行：pip install beautifulsoup4 lxml")
+            raise RuntimeError("beautifulsoup4 is not installed. Run: pip install beautifulsoup4 lxml")
         parser = "lxml" if lxml_html is not None else "html.parser"
         self.soup = BeautifulSoup(html, parser)
         self.logger = logger
         self._tree = None
         self._tree_built = False
 
-    # ---------- lxml 树懒加载 ----------
+    # ---------- lazily built lxml tree ----------
     def _lxml_tree(self):
         if not self._tree_built:
             self._tree_built = True
             if lxml_html is not None:
                 try:
-                    # document_fromstring 始终返回单个根节点；HTML 片段（如 <tr>…）先包一层容器。
+                    # document_fromstring always returns a single root; wrap HTML fragments (e.g. <tr>…)
                     html_text = self.soup.encode("utf-8").decode("utf-8", "ignore")
                     if "<html" not in html_text[:2000].lower():
                         html_text = f"<html><body><div>{html_text}</div></body></html>"
                     self._tree = lxml_html.document_fromstring(html_text)
                 except Exception as exc:  # pragma: no cover
-                    self.logger.debug("lxml 解析失败，XPath 选择器将被跳过：%s", exc)
+                    self.logger.debug("lxml parsing failed; XPath selectors will be skipped: %s", exc)
                     self._tree = None
         return self._tree
 
-    # ---------- 对外接口 ----------
+    # ---------- public interface ----------
     def find_nodes(self, selectors: Sequence[str]) -> List[Node]:
-        # 依次尝试候选选择器，返回「第一个有结果的选择器」所命中的全部节点。
-        # 全部未命中则返回空列表（不抛异常，交由上层判定为字段缺失）。
+        # Try the candidate selectors in order and return every node matched by the first selector
+        # that yields a result. Returns an empty list if none match (no exception; the caller treats
+        # it as a missing field).
         for selector in selectors:
             try:
                 nodes = self._find_once(selector)
             except Exception as exc:
-                self.logger.debug("选择器执行失败 [%s]：%s", selector, exc)
+                self.logger.debug("Selector failed [%s]: %s", selector, exc)
                 continue
             if nodes:
                 return nodes
         return []
 
     def first_text(self, selectors: Sequence[str]) -> Optional[str]:
-        # 取第一个候选选择器的首个节点文本。
+        # Return the text of the first node matched by the first working candidate selector.
         nodes = self.find_nodes(selectors)
         if not nodes:
             return None
@@ -108,7 +109,7 @@ class SelectorEngine:
         if not tags:
             return []
         nodes: List[Node] = []
-        for tag in tags[:200]:  # 上限保护，避免异常选择器命中整页
+        for tag in tags[:200]:  # cap, in case a stray selector matches the whole page
             if attr:
                 value = tag.get(attr)
                 if value is None:
@@ -121,20 +122,20 @@ class SelectorEngine:
     def _tag_to_node(self, tag: Any) -> Node:
         text = tag.get_text(" ", strip=True) if hasattr(tag, "get_text") else str(tag)
         attrs = {k: " ".join(v) if isinstance(v, list) else str(v) for k, v in (tag.attrs or {}).items()}
-        # 这里保留完整 HTML 片段：列表页需要用它二次定位条目内的详情链接
+        # The full HTML fragment is kept here: the listing page needs it to locate the detail link inside a row
         return Node(text=text, attrs=attrs, html=str(tag))
 
-    # ---------- 链接专用提取：同时拿到 href 与锚文本 ----------
+    # ---------- link extraction: both href and anchor text ----------
     def find_links(self, selectors: Sequence[str]) -> List[Tuple[str, str]]:
-        # 提取链接，返回 [(href, 锚文本), …]。
+        # Extract links as [(href, anchor text), …].
         #
-        # 与 find_nodes 的区别：这里同时要 href 和链接文字。
-        # 锚文本是后面做「关键词过滤（只看黄芩）」的依据，不能只取 href。
+        # Unlike find_nodes, this needs both the href and the link text.
+        # The anchor text is what keyword filtering ("only 黄芩") relies on, so href alone is not enough.
         for selector in selectors:
             try:
                 links = self._links_once(selector)
             except Exception as exc:
-                self.logger.debug("链接选择器执行失败 [%s]：%s", selector, exc)
+                self.logger.debug("Link selector failed [%s]: %s", selector, exc)
                 continue
             if links:
                 return links
@@ -147,7 +148,7 @@ class SelectorEngine:
         attr = wants_attr(selector) or "href"
         base = re.sub(r"::attr\([^)]+\)\s*$", "", selector).strip()
 
-        # XPath 分支
+        # XPath branch
         if is_xpath(base):
             tree = self._lxml_tree()
             if tree is None:
@@ -166,7 +167,7 @@ class SelectorEngine:
                     out.append((str(href), clean_text(text) or ""))
             return out
 
-        # CSS 分支
+        # CSS branch
         out = []
         for tag in self.soup.select(base)[:200]:
             href = tag.get(attr)
@@ -177,20 +178,20 @@ class SelectorEngine:
     def _find_xpath(self, xpath: str, attr: Optional[str]) -> List[Node]:
         tree = self._lxml_tree()
         if tree is None:
-            self.logger.debug("未安装 lxml，跳过 XPath 选择器：%s", xpath)
+            self.logger.debug("lxml is not installed; skipping XPath selector: %s", xpath)
             return []
         try:
             results = tree.xpath(xpath)
         except lxml_etree.XPathError as exc:  # type: ignore[union-attr]
-            self.logger.debug("非法 XPath [%s]：%s", xpath, exc)
+            self.logger.debug("Invalid XPath [%s]: %s", xpath, exc)
             return []
 
         nodes: List[Node] = []
         for item in results[:200]:
-            if isinstance(item, str):  # XPath 直接返回字符串（如 text()）
+            if isinstance(item, str):  # XPath returned a string directly (e.g. text())
                 nodes.append(Node(text=item))
                 continue
-            if not hasattr(item, "itertext"):  # 属性/数字等非元素结果
+            if not hasattr(item, "itertext"):  # non-element results such as attributes/numbers
                 nodes.append(Node(text=str(item)))
                 continue
             text = " ".join(t.strip() for t in item.itertext())
@@ -204,15 +205,16 @@ class SelectorEngine:
                 nodes.append(Node(text=text, attrs=attrs, html=lxml_etree.tostring(item, encoding="unicode")[:2000]))  # type: ignore[union-attr]
         return nodes
 
-    # ---------- 第三级回退：标签节点 / 表格对 ----------
+    # ---------- tier 3 fallback: label node / table pair ----------
     def build_label_index(self, labels: Dict[str, List[str]], max_label_len: int = 16) -> Dict[str, str]:
-        # 扫描整页，建立「标签文本 → 字段值」映射。
+        # Scan the whole page and build a "label text -> field value" map.
         #
-        # 适用结构：
+        # Handles structures such as:
         #     <span class="label">不良反应：</span><div class="content">…</div>
         #     <tr><td>禁忌</td><td>…</td></tr>
-        # 实现要点：单次遍历全页，遇到「文本很短且归一化后等于字段名」的节点，
-        # 就尝试从它的后继兄弟节点 / 父节点剩余文本 / 同行右侧单元格中取值。
+        # Implementation: a single pass over the page; whenever a node's text is short and, after
+        # normalisation, equals a field name, it tries to take the value from its next sibling /
+        # its parent's remaining text / the cell to its right in the same row.
         norm_to_field: Dict[str, str] = {}
         for field_name, aliases in labels.items():
             for alias in aliases:
@@ -222,37 +224,37 @@ class SelectorEngine:
         for tag in self.soup.find_all(True):
             raw = tag.get_text(" ", strip=True)
             if not raw or len(raw) > max_label_len:
-                continue  # 长文本不可能是标签（顺带避免遍历到整个 body）
+                continue  # a long text cannot be a label (also avoids walking the whole body)
             norm = normalize_label(raw)
             if norm not in norm_to_field:
                 continue
             field_name = norm_to_field[norm]
             if field_name in result:
-                continue  # 已取到值，不覆盖
+                continue  # a value was already captured; do not overwrite
 
             value = self._value_after_label(tag, raw)
             if value:
                 result[field_name] = value
-                self.logger.debug("标签节点回退命中字段 [%s]", field_name)
+                self.logger.debug("Label-node fallback matched field [%s]", field_name)
         return result
 
     def _value_after_label(self, tag: Any, label_text: str) -> Optional[str]:
-        # 从一个「标签节点」出发，按 4 种常见版式尝试取出字段值。
-        # 版式 1：标签与值在同一个单元格里，如 <td>禁忌：尚不明确</td>
+        # Starting from a "label node", try four common layouts to obtain the field value.
+        # Layout 1: label and value in the same cell, e.g. <td>禁忌：尚不明确</td>
         whole = tag.get_text(" ", strip=True)
         if len(whole) > len(label_text) + 1:
             rest = whole[len(label_text):]
             if clean_text(rest):
                 return clean_text(rest)
 
-        # 版式 2：后继兄弟节点，如 <span>禁忌</span><div>尚不明确</div>
+        # Layout 2: the next sibling node, e.g. <span>禁忌</span><div>尚不明确</div>
         sibling = getattr(tag, "find_next_sibling", lambda *a, **k: None)()
         if sibling is not None:
             sib_text = clean_text(sibling.get_text(" ", strip=True))
             if sib_text and len(sib_text) > 1:
                 return sib_text
 
-        # 版式 3：父节点整体文本减去标签本身
+        # Layout 3: the parent's whole text minus the label itself
         parent = getattr(tag, "parent", None)
         if parent is not None and getattr(parent, "name", None) not in (None, "body", "[document]"):
             parent_text = clean_text(parent.get_text(" ", strip=True)) or ""
@@ -260,7 +262,7 @@ class SelectorEngine:
             if len(remainder) > 3:
                 return clean_text(remainder)
 
-        # 版式 4：表格版式，标签在 <th>/<td>，值在同行右侧单元格
+        # Layout 4: table layout, where the label is in <th>/<td> and the value in the cell to its right
         if getattr(tag, "name", "") in ("th", "td"):
             row = tag.find_parent("tr")
             if row is not None:
@@ -274,13 +276,13 @@ class SelectorEngine:
 
 
 class DrugPageParser:
-    # 说明书详情页解析器：对每个字段执行三级回退。
+    # Label-page parser: runs the three-tier fallback for each field.
     #
-    #     第 1 级：SELECTORS 中的 CSS / XPath 选择器（最精确，优先）
-    #     第 2 级：中文说明书标注符号正则（【不良反应】…【禁忌】…）
-    #     第 3 级：标签节点 / 表格对通用扫描
+    #     Tier 1: CSS / XPath selectors from SELECTORS (most precise, tried first)
+    #     Tier 2: Chinese label-marker regex (【不良反应】…【禁忌】…)
+    #     Tier 3: generic label-node / table-pair scan
     #
-    # 任何一级都没命中 → 返回 None（绝不抛异常）。
+    # If none of the tiers matches, it returns None (never raises).
 
     def __init__(self, selectors: Dict[str, Any], logger: logging.Logger) -> None:
         self.selectors = selectors
@@ -288,32 +290,32 @@ class DrugPageParser:
 
     def parse(self, html: str, url: str, hint_name: Optional[str] = None) -> Dict[str, Any]:
         engine = SelectorEngine(html, self.logger)
-        record: Dict[str, Any] = {"药品名称": None, "主要成分": None, "不良反应": None, "禁忌": None, "注意事项": None}
+        record: Dict[str, Any] = {"drug_name": None, "ingredients": None, "adverse_reactions": None, "contraindications": None, "precautions": None}
 
         detail_sel = self.selectors.get("detail", {})
-        label_index: Optional[Dict[str, str]] = None  # 惰性构建，只有前两级都失败时才扫描
+        label_index: Optional[Dict[str, str]] = None  # built lazily, only if tiers 1 and 2 both fail
 
         for field_name, column in FIELD_COLUMNS.items():
             value: Optional[str] = None
 
-            # ---------- 第 1 级：选择器 ----------
+            # ---------- Tier 1: selectors ----------
             if field_name == "drug_name":
                 value = self._clean_drug_name(engine.first_text(detail_sel.get("drug_name", [])))
                 if not value:
-                    # 退化方案：<title> 标签 / og:title / 页面里最大的 h1
+                    # Fallbacks: <title> / og:title / the largest h1 on the page
                     value = (
                         self._title_fallback(engine)
-                        or clean_text(hint_name)  # 列表页链接文本作为最后兜底
+                        or clean_text(hint_name)  # the listing link text as a last resort
                     )
             else:
                 value = engine.first_text(detail_sel.get(field_name, []))
                 value = self._reject_foreign_label(value, field_name)
 
-            # ---------- 第 2 级：标注符号（仅正文型字段需要） ----------
+            # ---------- Tier 2: section markers (body fields only) ----------
             if not value and field_name != "drug_name":
                 value = self.extract_by_markers(engine.soup.get_text("\n"), field_name)
 
-            # ---------- 第 3 级：标签节点 / 表格对 ----------
+            # ---------- Tier 3: label node / table pair ----------
             if not value and field_name != "drug_name":
                 if label_index is None:
                     label_index = engine.build_label_index(FIELD_LABELS)
@@ -321,21 +323,22 @@ class DrugPageParser:
 
             record[column] = value
             if value:
-                self.logger.debug("字段 [%s] 提取成功，长度 %d", column, len(value))
+                self.logger.debug("Field [%s] extracted, length %d", column, len(value))
             else:
-                self.logger.debug("字段 [%s] 未找到，按缺失处理", column)
+                self.logger.debug("Field [%s] not found; treated as missing", column)
 
-        # 补充溯源信息：研究场景下必须能回溯到原始页面
-        record["数据来源URL"] = url
-        record["抓取时间"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        # Provenance: a research workflow must be able to trace a record back to the original page
+        record["source_url"] = url
+        record["scraped_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         return record
 
-    # ---------- 第 2 级实现：标注符号区间抽取 ----------
+    # ---------- tier 2 implementation: marker-delimited extraction ----------
     def extract_by_markers(self, full_text: str, field_name: str) -> Optional[str]:
-        # 从全文里用「【不良反应】…【禁忌】」这类标注切出字段内容。
+        # Cut a field's content out of the full text using markers such as "【不良反应】…【禁忌】".
         #
-        # 做法：找到起始标注 → 截取到「下一个任意 【xxx】 标注」或文末 → 清洗。
-        # 只匹配带方括号的标注，避免「禁忌症」这类词误触发。
+        # Approach: find the opening marker -> take everything up to the next "【xxx】" marker or the
+        # end of the text -> clean. Only bracketed markers are matched, so words like "禁忌症" do not
+        # trigger it by accident.
         aliases = FIELD_LABELS.get(field_name, [])
         if not aliases or not full_text:
             return None
@@ -346,21 +349,22 @@ class DrugPageParser:
             return None
 
         rest = full_text[match.end():]
-        nxt = re.search(r"[【\[]\s*[^】\]]{1,20}\s*[】\]]", rest)  # 下一个标注即结束
+        nxt = re.search(r"[【\[]\s*[^】\]]{1,20}\s*[】\]]", rest)  # the next marker ends the segment
         segment = rest[: nxt.start()] if nxt else rest
         return clean_text(segment)
 
-    # ---------- 第 1 级实现：防止选择器「串段」 ----------
+    # ---------- tier 1 implementation: prevent a selector from spilling into another field ----------
     @staticmethod
     def _reject_foreign_label(value: Optional[str], field_name: str) -> Optional[str]:
-        # 识别并丢弃「选择器抓到了别的字段」的值。
+        # Detect and discard a value where the selector grabbed a different field.
         #
-        # 典型场景：页面把标签和正文写在同一个节点里，如
-        # <li>【不良反应】尚不明确。</li>，而兜底 XPath 会把它当「短标签节点」，
-        # 再取其兄弟节点，于是抓到下一段「【禁忌】孕妇忌服…」。
+        # Typical case: the page puts the label and the body text in one node, e.g.
+        # <li>【不良反应】尚不明确。</li>, and the fallback XPath treats it as a "short label node"
+        # whose sibling is then the next paragraph "【禁忌】孕妇忌服…".
         #
-        # 规则：值若以方括号标注开头——标注是本字段自己的别名则去掉标注保留正文，
-        # 是别的标注（【禁忌】【贮藏】等）则判定为取错，放弃该值、交给后面的级别重取。
+        # Rule: if the value starts with a bracketed marker -- when the marker is this field's own
+        # alias, strip it and keep the body text; when it is another marker (【禁忌】【贮藏】 etc.),
+        # treat the value as wrong, discard it, and let the later tiers re-fetch.
         if not value:
             return value
         match = re.match(r"^[【\[]\s*([^】\]]{1,20})\s*[】\]]\s*", value)
@@ -371,25 +375,26 @@ class DrugPageParser:
             return clean_text(value[match.end():]) or None
         return None
 
-    # ---------- 第 1 级实现：药品名称清洗 ----------
+    # ---------- tier 1 implementation: clean the drug name ----------
     @staticmethod
     def _clean_drug_name(name: Optional[str]) -> Optional[str]:
-        # 清洗选择器取到的药品名称：去掉「××说明书」这类页面标题后缀。
+        # Clean a drug name taken by a selector: drop page-title suffixes such as "××说明书".
         #
-        # 例：药源网页面标题是「黄连上清片说明书」，实际药名应为「黄连上清片」。
+        # Example: the Yaopinnet page title is "黄连上清片说明书", while the drug name is "黄连上清片".
         if not name:
             return None
         cleaned = re.sub(r"[\s\u3000]*(?:药品)?说明书.*$", "", name).strip()
         return clean_text(cleaned) or None
 
     def _title_fallback(self, engine: SelectorEngine) -> Optional[str]:
-        # 药品名称兜底：取 og:title 或 <title>。
+        # Drug-name fallback: take og:title or <title>.
         #
-        # 需要处理两种噪声：
-        #   ① 尾部通用词，如「黄芩片 说明书」「乙酰半胱氨酸泡腾片说明书」
-        #   ② 站点后缀，如「- 国家药品监督管理局」「_某某药品数据库」
-        # 如果清洗后仍含「查询 / 搜索 / 列表」等词，说明这是个栏目页而非详情页，
-        # 此时返回 None，让上游改用列表页条目文本兜底，避免把栏目名当药名写进 CSV。
+        # Two kinds of noise need handling:
+        #   1) trailing generic words, e.g. "黄芩片 说明书" / "乙酰半胱氨酸泡腾片说明书"
+        #   2) site suffixes, e.g. "- 国家药品监督管理局" / "_某某药品数据库"
+        # If the cleaned text still contains "查询 / 搜索 / 列表" etc., it is a section page rather
+        # than a detail page; return None so the caller falls back to the listing row text, instead
+        # of writing a section name into the CSV as if it were a drug name.
         raw: Optional[str] = None
         og = engine.soup.find("meta", attrs={"property": "og:title"})
         if og and og.get("content"):
@@ -399,9 +404,9 @@ class DrugPageParser:
         if not raw:
             return None
 
-        # ① 去掉「[药品]说明书…」及其后的所有内容
+        # (1) drop "[药品]说明书…" and everything after it
         name = re.sub(r"[\s\u3000]*(?:药品)?说明书.*$", "", raw).strip()
-        # ② 按常见站点分隔符取第一段
+        # (2) take the first segment split by common site separators
         name = re.split(r"\s*[-_|｜]\s*", name)[0].strip()
         name = clean_text(name)
 

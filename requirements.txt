@@ -1,20 +1,20 @@
-# tcm_scraper.py 依赖清单
-# 安装：python -m pip install -r requirements.txt
-# 环境：Python 3.9+（已在 3.14 上验证可运行）
+# tcm_scraper.py dependency list
+# Install: python -m pip install -r requirements.txt
+# Environment: Python 3.9+ (verified on 3.14)
 
-# HTTP 请求（robots.txt 检查 + 静态页抓取模式）
+# HTTP requests (robots.txt check + static-page fetching mode)
 requests>=2.31.0
 
-# 动态页面抓取（应对 JS 渲染 / 异步加载的药品查询页）
+# Dynamic-page fetching (JS-rendered / asynchronously loaded drug-query pages)
 selenium>=4.18.0
 webdriver-manager>=4.0.0
 
-# HTML 解析：CSS Selector 用 BeautifulSoup，XPath 用 lxml
+# HTML parsing: CSS selectors via BeautifulSoup, XPath via lxml
 beautifulsoup4>=4.12.0
 lxml>=5.0.0
 
-# 数据清洗、去重与 CSV 导出
+# Data cleaning, de-duplication and CSV export
 pandas>=2.0.0
 
-# 声明式超时重试（缺失时脚本会自动降级为内置重试装饰器）
+# Declarative timeout retries (the script falls back to a built-in retry decorator if missing)
 tenacity>=8.2.0

@@ -1,41 +1,50 @@
 # -*- coding: utf-8 -*-
-# tcm_scraper.py —— 中药（中成药 / 中药材）公开说明书信息采集脚本
-# 用途
-# 从公开的药品说明书列表页（如国家药监局数据查询、药源网等）采集指定中药相关药品的
-# 说明书字段（关键词可自定义，默认不筛选）：
-#     药品名称 / 主要成分 / 不良反应 / 禁忌 / 注意事项
-# 经清洗去重后导出为 UTF-8-SIG 编码的 CSV，供后续 LLM 毒性信息抽取与数据库构建使用。
+# tcm_scraper.py -- collector for public drug-label information of Chinese medicines.
 #
-# 本文件是入口脚本，真正的实现按职责拆分在同目录的 tcm_scraper_lib/ 包里：
-#     config.py    配置与常量（选择器、字段映射、默认参数）  ← 适配新站点主要改这里
-#     utils.py     日志、文本清洗、限速、重试等通用工具
-#     fetch.py     页面获取（requests / selenium / 本地文件）+ robots.txt + 空结果诊断
-#     parse.py     说明书字段解析（选择器 → 标注符号 → 标签节点 三级回退）
-#     crawl.py     列表页翻页、详情页遍历、本地文件夹批量解析
-#     pipeline.py  pandas 清洗、去重、CSV 导出
-#     cli.py       命令行参数、设置向导、主流程
+# Purpose
+# Collects label fields for specified Chinese-medicine products from public drug-label listing
+# pages (e.g. the NMPA data-query site, Yaopinnet). The keyword is user-defined and no filtering
+# is applied by default:
+#     drug name / main ingredients / adverse reactions / contraindications / precautions
+# Results are cleaned, de-duplicated and exported as a UTF-8-SIG CSV for downstream LLM-based
+# toxicity extraction and database construction.
 #
-# 设计原则
-# 1. 模块化：入口脚本只负责启动，抓取 / 解析 / 清洗 / 导出各司其职（见上）。
-# 2. 稳定优先：随机 User-Agent + 随机休眠 + 超时重试 + 单条失败不影响整体。
-# 3. 容错解析：字段缺失不报错，返回 None，最终统一填 "N/A"。
-#    每个字段按「CSS/XPath 选择器 → 标注符号(【不良反应】) → 标签节点/表格对」三级回退解析。
+# This file is the entry script. The implementation is split by responsibility into the
+# tcm_scraper_lib/ package next to it:
+#     config.py    configuration and constants (selectors, field mapping, defaults)  <- main file to edit for a new site
+#     utils.py     logging, text cleaning, rate limiting, retry utilities
+#     fetch.py     page fetching (requests / selenium / local file) + robots.txt + empty-result diagnosis
+#     parse.py     label-field parsing (selector -> section marker -> label node, three-tier fallback)
+#     crawl.py     listing-page pagination, detail-page traversal, local-folder batch parsing
+#     pipeline.py  pandas cleaning, de-duplication, CSV export
+#     cli.py       command-line arguments, setup wizard, main flow
 #
-# ⚠️ 免责与合规提示（请务必阅读）
-# * 本脚本仅用于学术研究目的的信息整理。请遵守目标站点的 robots.txt、用户协议与服务条款。
-# * 请勿高频请求；默认已限制为 2~5 秒随机间隔 + 单条最大页数限制，请勿调低。
-# * 采集到的说明书文本版权归原权利人所有，请勿公开再分发全文，建议仅保留结构化字段用于研究。
-# * 本脚本不用于任何医疗决策，也不构成用药建议。
+# Design principles
+# 1. Modular: the entry script only bootstraps; fetching / parsing / cleaning / exporting are separate.
+# 2. Stability first: random User-Agent + random delay + timeout retries; a single failure never
+#    aborts the whole run.
+# 3. Fault-tolerant parsing: a missing field returns None instead of raising, and is finally filled
+#    with "N/A". Each field falls back through three tiers --
+#    "CSS/XPath selector -> section marker (e.g. 【不良反应】) -> label node / table pair".
 #
-# 运行
-#     python tcm_scraper.py                          # 推荐：启动设置向导，按提示填写目标地址
-#     python tcm_scraper.py --url "https://..."      # 直接指定目标地址，跳过向导
+# Disclaimer and compliance (please read)
+# * This script is for academic research only. Respect the target site's robots.txt, terms of use
+#   and terms of service.
+# * Do not send high-frequency requests. A 2-5 second random interval and a per-run page cap are
+#   enforced by default; do not lower them.
+# * The copyright of the scraped label text belongs to the original rights holders. Do not publicly
+#   redistribute the full text; prefer keeping only the structured fields for research.
+# * This script is not intended for any medical decision and does not constitute medical advice.
+#
+# Run
+#     python tcm_scraper.py                          # recommended: start the setup wizard
+#     python tcm_scraper.py --url "https://..."      # specify the target directly, skip the wizard
 #     python tcm_scraper.py --help
 #
-# 更换目标站点的三种方式（均无需修改代码）
-#     1. 运行脚本，在设置向导中填写新地址；
-#     2. 编辑项目根目录下的 config.json（首次运行自动生成）；
-#     3. 运行时附加 --url "新网址"。
+# Three ways to change the target site (none requires editing code)
+#     1. Run the script and enter the new address in the setup wizard;
+#     2. Edit config.json in the project root (auto-generated on first run);
+#     3. Pass --url "new address" on the command line.
 
 from __future__ import annotations
 
